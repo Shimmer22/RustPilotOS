@@ -13,6 +13,8 @@ pub static HRT_QUEUE: LazyLock<Box<HRTQueue>> = LazyLock::new(|| {
     let m = HRTQueue::new();
     m
 });
+unsafe impl Send for HRTQueue {}
+unsafe impl Sync for HRTQueue {}
 
 #[derive(PartialEq, Clone, Copy, Debug)]
 pub struct Timespec {
@@ -175,7 +177,7 @@ impl HRTQueue {
     fn new() -> Box<Self> {
         let mut queue = Box::new(HRTQueue {
             list: Mutex::new(VecDeque::new()),
-            thread_id: 0,
+            thread_id: std::ptr::null_mut(),
         });
 
         let queue_ptr = &mut *queue as *mut HRTQueue as *mut libc::c_void;
@@ -187,7 +189,7 @@ impl HRTQueue {
         }
 
         let _thread_id = create_phtread(16384, 99, hrtqueue_run, queue_ptr, fifo_scheduled);
-        queue.thread_id = _thread_id;
+        queue.thread_id = _thread_id as usize as *mut libc::c_void;
 
         unsafe {
             libc::signal(libc::SIGCONT, null_signal_handler as libc::sighandler_t);
