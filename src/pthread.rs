@@ -59,7 +59,10 @@ pub fn create_phtread(
         libc::pthread_attr_setschedparam(attr_ptr, &param);
 
         let mut pthread = MaybeUninit::<libc::pthread_t>::uninit();
-        libc::pthread_create(pthread.as_mut_ptr(), attr_ptr, f, value);
+        let ret = libc::pthread_create(pthread.as_mut_ptr(), attr_ptr, f, value);
+        if ret != 0 {
+            panic!("pthread_create failed: {}", ret);
+        }
         pthread.assume_init() as usize as c_ulong
     }
 }
