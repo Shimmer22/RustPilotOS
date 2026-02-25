@@ -83,7 +83,7 @@ impl SchedulePthread {
 
     pub fn join(&self) {
         unsafe {
-            libc::pthread_join(self.thread_id as usize as *mut libc::c_void, std::ptr::null_mut());
+            libc::pthread_join(self.thread_id as libc::pthread_t, std::ptr::null_mut());
         }
     }
 

@@ -51,10 +51,6 @@ pub fn create_phtread(
 
         let param = libc::sched_param {
             sched_priority: priority,
-            sched_ss_init_budget: libc::timespec { tv_sec: 0, tv_nsec: 0 },
-            sched_ss_low_priority: 0,
-            sched_ss_max_repl: 0,
-            sched_ss_repl_period: libc::timespec { tv_sec: 0, tv_nsec: 0 },
         };
         libc::pthread_attr_setschedparam(attr_ptr, &param);
 
@@ -63,7 +59,7 @@ pub fn create_phtread(
         if ret != 0 {
             panic!("pthread_create failed: {}", ret);
         }
-        pthread.assume_init() as usize as c_ulong
+        pthread.assume_init() as c_ulong
     }
 }
 

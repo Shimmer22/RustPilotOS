@@ -6,9 +6,11 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-libc = {git = "https://github.com/rust-lang/libc.git"}
+libc = "0.2.152"
 fdt = "0.1.5"
 ctor = "0.2.6"
+
+[target.'cfg(unix)'.dependencies]
 polling = "3.5.0"
 sendfd = "0.4.3"
 

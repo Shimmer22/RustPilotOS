@@ -177,7 +177,7 @@ impl HRTQueue {
     fn new() -> Box<Self> {
         let mut queue = Box::new(HRTQueue {
             list: Mutex::new(VecDeque::new()),
-            thread_id: std::ptr::null_mut(),
+            thread_id: 0,
         });
 
         let queue_ptr = &mut *queue as *mut HRTQueue as *mut libc::c_void;
@@ -189,7 +189,7 @@ impl HRTQueue {
         }
 
         let _thread_id = create_phtread(16384, 99, hrtqueue_run, queue_ptr, fifo_scheduled);
-        queue.thread_id = _thread_id as usize as *mut libc::c_void;
+        queue.thread_id = _thread_id as libc::pthread_t;
 
         unsafe {
             libc::signal(libc::SIGCONT, null_signal_handler as libc::sighandler_t);
