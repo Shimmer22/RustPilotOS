@@ -2,7 +2,6 @@ use polling::{Event, Events, Poller};
 use sendfd::{RecvWithFd, SendWithFd};
 use std::{
     collections::HashMap,
-    ffi::CStr,
     io::{self, BufRead, BufReader, Read, Write},
     mem::MaybeUninit,
     os::{
@@ -14,6 +13,18 @@ use std::{
 };
 
 use crate::{module::Module, pthread_scheduler::SchedulePthread};
+
+fn debug_enabled() -> bool {
+    std::env::var("LINTX_DEBUG")
+        .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "on" | "ON"))
+        .unwrap_or(false)
+}
+
+fn debug_log(msg: &str) {
+    if debug_enabled() {
+        eprintln!("[lintx-debug][server] {msg}");
+    }
+}
 
 #[repr(C)]
 struct ThreadSpecificData {
@@ -58,87 +69,166 @@ unsafe extern "C" fn drop_specifidata(ptr: *mut libc::c_void) {
 }
 
 pub fn server_init<P: AsRef<Path>>(socket_path: P) -> Result<(), std::io::Error> {
-    let _ = std::fs::remove_file(socket_path.as_ref());
+    let socket_path = socket_path.as_ref();
+    debug_log(&format!(
+        "server_init socket_path={} cwd={}",
+        socket_path.display(),
+        std::env::current_dir()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|_| "<unknown>".to_string())
+    ));
 
-    let listener = UnixListener::bind(socket_path.as_ref()).unwrap();
-    listener.set_nonblocking(true).unwrap();
+    match std::fs::remove_file(socket_path) {
+        Ok(()) => debug_log(&format!("removed stale socket {}", socket_path.display())),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+        Err(err) => {
+            return Err(io::Error::new(
+                err.kind(),
+                format!(
+                    "failed to remove stale socket `{}`: {}",
+                    socket_path.display(),
+                    err
+                ),
+            ));
+        }
+    }
 
-    let poller = Poller::new().unwrap();
+    let listener = UnixListener::bind(socket_path).map_err(|err| {
+        io::Error::new(
+            err.kind(),
+            format!(
+                "failed to bind unix socket `{}`: {}",
+                socket_path.display(),
+                err
+            ),
+        )
+    })?;
+    listener.set_nonblocking(true).map_err(|err| {
+        io::Error::new(
+            err.kind(),
+            format!(
+                "failed to set nonblocking on unix socket `{}`: {}",
+                socket_path.display(),
+                err
+            ),
+        )
+    })?;
+
+    let poller = Poller::new().map_err(|err| {
+        io::Error::new(
+            err.kind(),
+            format!("failed to create poller for server socket: {}", err),
+        )
+    })?;
     let mut fd_thread_map: HashMap<usize, libc::c_ulong> = HashMap::new();
     loop {
-        if let Ok((mut client, _)) = listener.accept() {
-            let mut fds: [libc::c_int; 2] = [0; 2];
-            let mut buf: [u8; 10] = [0; 10];
-            unsafe {
-                client
-                    .recv_with_fd(
+        match listener.accept() {
+            Ok((mut client, _)) => {
+                debug_log(&format!("accepted fd={}", client.as_raw_fd()));
+                let mut fds: [libc::c_int; 2] = [0; 2];
+                let mut buf: [u8; 10] = [0; 10];
+                let recv_ret = unsafe {
+                    client.recv_with_fd(
                         &mut buf,
                         std::slice::from_raw_parts_mut(fds.as_mut_ptr(), 2),
                     )
-                    .unwrap();
-            }
-
-            let mut buffer = [0; 100];
-            client.read(&mut buffer).unwrap();
-
-            let cmd_raw = CStr::from_bytes_until_nul(&buffer)
-                .unwrap()
-                .to_str()
-                .unwrap()
-                .to_string();
-
-            let mut args: Vec<String> = cmd_raw
-                .split_whitespace()
-                .map(|x| x.to_string())
-                .collect();
-            if args.is_empty() {
-                continue;
-            }
-
-            let detached = if args.first().unwrap() == "__DETACH__" {
-                args.remove(0);
-                true
-            } else {
-                false
-            };
-
-            if args.is_empty() {
-                continue;
-            }
-
-            if args[0] == "shutdown" {
-                break;
-            }
-
-            let mut client_cp = client.try_clone().unwrap();
-            let argv_owned = args;
-            
-            let x = SchedulePthread::new_simple(Box::new(move |_| {
-                let argv: Vec<&str> = argv_owned.iter().map(|x| x.as_str()).collect();
-                if !detached {
-                    let data = ThreadSpecificData {
-                        stream: &mut client_cp as *mut UnixStream,
-                        client_stdin: fds[0],
-                        client_stdout: fds[1],
-                    };
-                    set_thread_specifidata(data);
+                };
+                if let Err(err) = recv_ret {
+                    debug_log(&format!("recv_with_fd failed: {}", err));
+                    continue;
                 }
-                Module::get_module(argv[0]).execute((argv.len()) as u32, argv.as_ptr());
-                if !detached {
-                    _ = client_cp.shutdown(std::net::Shutdown::Both);
-                }
-            }));
 
-            if !detached {
-                unsafe {
-                    poller
-                        .add(
+                let mut buffer = [0; 100];
+                let read_n = match client.read(&mut buffer) {
+                    Ok(n) => n,
+                    Err(err) => {
+                        debug_log(&format!("read command failed: {}", err));
+                        continue;
+                    }
+                };
+                if read_n == 0 {
+                    debug_log("empty command from client");
+                    continue;
+                }
+
+                let cmd_raw = String::from_utf8_lossy(&buffer[..read_n])
+                    .trim_matches(char::from(0))
+                    .trim()
+                    .to_string();
+                debug_log(&format!("raw command=`{}`", cmd_raw));
+
+                let mut args: Vec<String> =
+                    cmd_raw.split_whitespace().map(|x| x.to_string()).collect();
+                if args.is_empty() {
+                    continue;
+                }
+
+                let detached = if args.first().unwrap() == "__DETACH__" {
+                    args.remove(0);
+                    true
+                } else {
+                    false
+                };
+
+                if args.is_empty() {
+                    continue;
+                }
+
+                if args[0] == "shutdown" {
+                    break;
+                }
+
+                let mut client_cp = match client.try_clone() {
+                    Ok(cp) => cp,
+                    Err(err) => {
+                        debug_log(&format!("try_clone failed: {}", err));
+                        continue;
+                    }
+                };
+                let argv_owned = args;
+
+                let x = SchedulePthread::new_simple(Box::new(move |_| {
+                    let argv: Vec<&str> = argv_owned.iter().map(|x| x.as_str()).collect();
+                    if debug_enabled() {
+                        let joined = argv.join(" ");
+                        eprintln!("[lintx-debug][server-worker] detached={detached} argv={joined}");
+                    }
+                    if !detached {
+                        let data = ThreadSpecificData {
+                            stream: &mut client_cp as *mut UnixStream,
+                            client_stdin: fds[0],
+                            client_stdout: fds[1],
+                        };
+                        set_thread_specifidata(data);
+                    }
+                    if let Some(module) = Module::try_get_module(argv[0]) {
+                        module.execute((argv.len()) as u32, argv.as_ptr());
+                    } else if !detached {
+                        let _ = writeln!(client_cp, "[lintx] unknown module: {}", argv[0]);
+                    } else {
+                        eprintln!("[lintx] unknown module: {}", argv[0]);
+                    }
+                    if !detached {
+                        _ = client_cp.shutdown(std::net::Shutdown::Both);
+                    }
+                }));
+
+                if !detached {
+                    if let Err(err) = unsafe {
+                        poller.add(
                             &client,
                             Event::none(client.as_raw_fd() as usize).with_interrupt(),
                         )
-                        .unwrap()
-                };
-                fd_thread_map.insert(client.as_raw_fd() as usize, x.thread_id);
+                    } {
+                        debug_log(&format!("poller.add failed: {}", err));
+                        continue;
+                    }
+                    fd_thread_map.insert(client.as_raw_fd() as usize, x.thread_id);
+                }
+            }
+            Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
+            Err(err) => {
+                debug_log(&format!("accept failed: {}", err));
             }
         }
 
@@ -146,9 +236,12 @@ pub fn server_init<P: AsRef<Path>>(socket_path: P) -> Result<(), std::io::Error>
         let _ = poller.wait(&mut events, Some(std::time::Duration::from_secs(1)));
 
         for ev in events.iter() {
-            let thread = fd_thread_map.remove(&ev.key).unwrap();
-            unsafe {
-                libc::pthread_cancel(thread as libc::pthread_t); // some memory may leak
+            if let Some(thread) = fd_thread_map.remove(&ev.key) {
+                unsafe {
+                    libc::pthread_cancel(thread as libc::pthread_t); // some memory may leak
+                }
+            } else if debug_enabled() {
+                eprintln!("[lintx-debug][server] got event for unknown key={}", ev.key);
             }
         }
     }

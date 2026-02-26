@@ -34,6 +34,10 @@ impl Module {
         MODULE_LIST.read().unwrap().get(name).unwrap().clone()
     }
 
+    pub fn try_get_module(name: &str) -> Option<Arc<Module>> {
+        MODULE_LIST.read().unwrap().get(name).cloned()
+    }
+
     pub fn execute(self: &Arc<Self>, argc: u32, argv: *const &str) {
         let p = &(self.init_func);
         p(argc, argv);
