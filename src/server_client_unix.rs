@@ -120,7 +120,7 @@ pub fn server_init<P: AsRef<Path>>(socket_path: P) -> Result<(), std::io::Error>
             format!("failed to create poller for server socket: {}", err),
         )
     })?;
-    let mut fd_thread_map: HashMap<usize, libc::c_ulong> = HashMap::new();
+    let mut fd_thread_map: HashMap<usize, libc::pthread_t> = HashMap::new();
     loop {
         match listener.accept() {
             Ok((mut client, _)) => {
@@ -238,7 +238,7 @@ pub fn server_init<P: AsRef<Path>>(socket_path: P) -> Result<(), std::io::Error>
         for ev in events.iter() {
             if let Some(thread) = fd_thread_map.remove(&ev.key) {
                 unsafe {
-                    libc::pthread_cancel(thread as libc::pthread_t); // some memory may leak
+                    libc::pthread_cancel(thread); // some memory may leak
                 }
             } else if debug_enabled() {
                 eprintln!("[lintx-debug][server] got event for unknown key={}", ev.key);

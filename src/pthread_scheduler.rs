@@ -1,8 +1,6 @@
-use std::{
-    cell::Cell, ptr::null_mut, sync::Arc
-};
+use std::{cell::Cell, ptr::null_mut, sync::Arc};
 
-use libc::{c_long, c_ulong};
+use libc::c_long;
 
 use crate::{
     hrt::{get_time_now, Timespec},
@@ -17,13 +15,13 @@ thread_local! {
 pub struct SchedulePthread {
     thread_func: fn(*mut libc::c_void) -> *mut libc::c_void,
     pub thread_args: *mut libc::c_void,
-    pub thread_id: c_ulong,
+    pub thread_id: libc::pthread_t,
 }
 
 impl SchedulePthread {
     extern "C" fn wrapper(ptr: *mut libc::c_void) -> *mut libc::c_void {
         let sp = unsafe { Arc::from_raw(ptr as *const SchedulePthread) };
-        
+
         (sp.thread_func)(Arc::into_raw(sp) as *mut libc::c_void);
         null_mut()
     }
@@ -52,7 +50,7 @@ impl SchedulePthread {
     ) -> Arc<Self> {
         let func = Box::new(f);
 
-        let a = Box::into_raw(func) as *mut libc::c_void; 
+        let a = Box::into_raw(func) as *mut libc::c_void;
         Self::new(stack_size, priority, Self::simple_wrapper, a, true)
     }
 
@@ -66,7 +64,7 @@ impl SchedulePthread {
         let ret = Arc::new(SchedulePthread {
             thread_func: f,
             thread_args: extral_args,
-            thread_id: 0
+            thread_id: unsafe { std::mem::zeroed() },
         });
         let id = create_phtread(
             stack_size,
@@ -83,7 +81,7 @@ impl SchedulePthread {
 
     pub fn join(&self) {
         unsafe {
-            libc::pthread_join(self.thread_id as libc::pthread_t, std::ptr::null_mut());
+            libc::pthread_join(self.thread_id, std::ptr::null_mut());
         }
     }
 

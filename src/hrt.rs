@@ -7,7 +7,7 @@ use std::{
 
 use libc::c_long;
 
-use crate::{lock_step::LOCK_STEP_CURRENT_TIME, pthread::* };
+use crate::{lock_step::LOCK_STEP_CURRENT_TIME, pthread::*};
 
 pub static HRT_QUEUE: LazyLock<Box<HRTQueue>> = LazyLock::new(|| {
     let m = HRTQueue::new();
@@ -91,7 +91,10 @@ impl Timespec {
     }
 
     pub fn from_secs(sec: i64) -> Self {
-        Self { sec:sec as c_long, nsec: 0 }
+        Self {
+            sec: sec as c_long,
+            nsec: 0,
+        }
     }
 }
 
@@ -119,7 +122,6 @@ unsafe impl Send for HRTEntry {}
 unsafe impl Sync for HRTEntry {}
 
 impl HRTEntry {
-
     pub fn new<F>(deadline: Timespec, callback: F) -> HRTEntry
     where
         F: Fn() + 'static,
@@ -177,7 +179,7 @@ impl HRTQueue {
     fn new() -> Box<Self> {
         let mut queue = Box::new(HRTQueue {
             list: Mutex::new(VecDeque::new()),
-            thread_id: 0,
+            thread_id: unsafe { std::mem::zeroed() },
         });
 
         let queue_ptr = &mut *queue as *mut HRTQueue as *mut libc::c_void;
@@ -189,7 +191,7 @@ impl HRTQueue {
         }
 
         let _thread_id = create_phtread(16384, 99, hrtqueue_run, queue_ptr, fifo_scheduled);
-        queue.thread_id = _thread_id as libc::pthread_t;
+        queue.thread_id = _thread_id;
 
         unsafe {
             libc::signal(libc::SIGCONT, null_signal_handler as libc::sighandler_t);
@@ -234,5 +236,4 @@ mod tests {
         queue.awake();
         Box::leak(queue);
     }
-
 }

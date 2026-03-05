@@ -1,17 +1,19 @@
+use libc::c_long;
 use std::mem::MaybeUninit;
-use libc::{c_long, c_ulong};
 
 #[inline]
 pub fn nanosleep(ns: c_long) -> c_long {
     // ns should less than  999999999
-    #[cfg(feature= "lock_step_enabled")]{
+    #[cfg(feature = "lock_step_enabled")]
+    {
         crate::lock_step::lock_step_nanosleep(ns)
     }
 
-    #[cfg(not(feature = "lock_step_enabled"))]{
+    #[cfg(not(feature = "lock_step_enabled"))]
+    {
         let t = libc::timespec {
             tv_sec: 0,
-            tv_nsec: ns,            
+            tv_nsec: ns,
         };
         let mut rt = libc::timespec {
             tv_sec: 0,
@@ -22,7 +24,6 @@ pub fn nanosleep(ns: c_long) -> c_long {
         };
         rt.tv_nsec
     }
-
 }
 
 pub fn create_phtread(
@@ -31,27 +32,39 @@ pub fn create_phtread(
     f: extern "C" fn(*mut libc::c_void) -> *mut libc::c_void,
     value: *mut libc::c_void,
     is_fifo_schedule: bool,
-) -> c_ulong {
+) -> libc::pthread_t {
     unsafe {
         let mut attr = MaybeUninit::<libc::pthread_attr_t>::uninit();
         let attr_ptr = attr.as_mut_ptr();
         libc::pthread_attr_init(attr_ptr);
-        assert_eq!(libc::pthread_attr_setstacksize(attr_ptr, stack_size as usize), 0);
-        assert_eq!(libc::pthread_attr_setinheritsched(attr_ptr, libc::PTHREAD_EXPLICIT_SCHED), 0);
+        assert_eq!(
+            libc::pthread_attr_setstacksize(attr_ptr, stack_size as usize),
+            0
+        );
+        assert_eq!(
+            libc::pthread_attr_setinheritsched(attr_ptr, libc::PTHREAD_EXPLICIT_SCHED),
+            0
+        );
         {
             if is_fifo_schedule {
-                assert_eq!(libc::pthread_attr_setschedpolicy(attr_ptr, libc::SCHED_FIFO), 0);
-                if libc::getuid() !=0{
+                assert_eq!(
+                    libc::pthread_attr_setschedpolicy(attr_ptr, libc::SCHED_FIFO),
+                    0
+                );
+                if libc::getuid() != 0 {
                     panic!("please use root to create the fifo thread!");
                 }
             } else {
-                assert_eq!(libc::pthread_attr_setschedpolicy(attr_ptr, libc::SCHED_OTHER), 0);
+                assert_eq!(
+                    libc::pthread_attr_setschedpolicy(attr_ptr, libc::SCHED_OTHER),
+                    0
+                );
             }
         }
 
-        let param = libc::sched_param {
-            sched_priority: priority,
-        };
+        // libc::sched_param has platform-specific extra fields on some targets (e.g. musl).
+        let mut param: libc::sched_param = std::mem::zeroed();
+        param.sched_priority = priority;
         libc::pthread_attr_setschedparam(attr_ptr, &param);
 
         let mut pthread = MaybeUninit::<libc::pthread_t>::uninit();
@@ -59,7 +72,7 @@ pub fn create_phtread(
         if ret != 0 {
             panic!("pthread_create failed: {}", ret);
         }
-        pthread.assume_init() as c_ulong
+        pthread.assume_init()
     }
 }
 
