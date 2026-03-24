@@ -58,6 +58,7 @@ where
         let updated = self.last_cnt != cnt;
 
         if updated {
+            self.last_cnt = cnt;
             Some(data)
         } else {
             None
@@ -247,6 +248,23 @@ mod tests {
 
         let try_result = rx.try_read();
         assert!(try_result.is_none());
+    }
+
+    #[test]
+    fn test_try_read_consumes_update() {
+        let (tx, mut rx) = Channel::<TestStruct>::new();
+
+        tx.send(TestStruct {
+            x: 1,
+            y: 2,
+            z: 3,
+        });
+
+        let try_result = rx.try_read().unwrap();
+        assert_eq!(try_result.x, 1);
+        assert_eq!(try_result.y, 2);
+        assert_eq!(try_result.z, 3);
+        assert!(rx.try_read().is_none());
     }
 
     #[test]
