@@ -33,8 +33,8 @@ struct ThreadSpecificData {
     client_stdout: libc::c_int,
 }
 
-static PTHREAD_KEY: LazyLock<u32> = LazyLock::new(|| {
-    let mut key: MaybeUninit<u32> = MaybeUninit::zeroed();
+static PTHREAD_KEY: LazyLock<libc::pthread_key_t> = LazyLock::new(|| {
+    let mut key: MaybeUninit<libc::pthread_key_t> = MaybeUninit::zeroed();
     unsafe {
         libc::pthread_key_create(key.as_mut_ptr(), Some(drop_specifidata));
         key.assume_init()
@@ -133,9 +133,23 @@ pub fn server_init<P: AsRef<Path>>(socket_path: P) -> Result<(), std::io::Error>
                         std::slice::from_raw_parts_mut(fds.as_mut_ptr(), 2),
                     )
                 };
-                if let Err(err) = recv_ret {
-                    debug_log(&format!("recv_with_fd failed: {}", err));
+                let (recv_n, _) = match recv_ret {
+                    Ok(ret) => ret,
+                    Err(err) => {
+                        debug_log(&format!("recv_with_fd failed: {}", err));
+                        continue;
+                    }
+                };
+                if recv_n == 0 {
+                    debug_log("recv_with_fd returned 0 bytes");
                     continue;
+                }
+
+                let mut cmd_bytes = Vec::with_capacity(128);
+                // First byte is handshake marker (`15`) from client.
+                // If command bytes are coalesced in same packet, preserve them.
+                if recv_n > 1 {
+                    cmd_bytes.extend_from_slice(&buf[1..recv_n]);
                 }
 
                 let mut buffer = [0; 100];
@@ -146,12 +160,15 @@ pub fn server_init<P: AsRef<Path>>(socket_path: P) -> Result<(), std::io::Error>
                         continue;
                     }
                 };
-                if read_n == 0 {
+                if read_n == 0 && cmd_bytes.is_empty() {
                     debug_log("empty command from client");
                     continue;
                 }
+                if read_n > 0 {
+                    cmd_bytes.extend_from_slice(&buffer[..read_n]);
+                }
 
-                let cmd_raw = String::from_utf8_lossy(&buffer[..read_n])
+                let cmd_raw = String::from_utf8_lossy(&cmd_bytes)
                     .trim_matches(char::from(0))
                     .trim()
                     .to_string();
@@ -176,6 +193,35 @@ pub fn server_init<P: AsRef<Path>>(socket_path: P) -> Result<(), std::io::Error>
 
                 if args[0] == "shutdown" {
                     break;
+                }
+
+                #[cfg(target_os = "macos")]
+                if args.first().map(|x| x.as_str()) == Some("ui_demo") {
+                    let argv_owned = args;
+                    let argv: Vec<&str> = argv_owned.iter().map(|x| x.as_str()).collect();
+                    if debug_enabled() {
+                        let joined = argv.join(" ");
+                        eprintln!("[lintx-debug][server-main] detached={detached} argv={joined}");
+                    }
+                    if !detached {
+                        let data = ThreadSpecificData {
+                            stream: &mut client as *mut UnixStream,
+                            client_stdin: fds[0],
+                            client_stdout: fds[1],
+                        };
+                        set_thread_specifidata(data);
+                    }
+                    if let Some(module) = Module::try_get_module(argv[0]) {
+                        module.execute((argv.len()) as u32, argv.as_ptr());
+                    } else if !detached {
+                        let _ = writeln!(client, "[lintx] unknown module: {}", argv[0]);
+                    } else {
+                        eprintln!("[lintx] unknown module: {}", argv[0]);
+                    }
+                    if !detached {
+                        let _ = client.shutdown(std::net::Shutdown::Both);
+                    }
+                    continue;
                 }
 
                 let mut client_cp = match client.try_clone() {
