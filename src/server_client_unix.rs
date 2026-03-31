@@ -145,14 +145,16 @@ pub fn server_init<P: AsRef<Path>>(socket_path: P) -> Result<(), std::io::Error>
                     continue;
                 }
 
-                let mut cmd_bytes = Vec::with_capacity(128);
+                let mut cmd_bytes = Vec::with_capacity(512);
                 // First byte is handshake marker (`15`) from client.
                 // If command bytes are coalesced in same packet, preserve them.
                 if recv_n > 1 {
                     cmd_bytes.extend_from_slice(&buf[1..recv_n]);
                 }
 
-                let mut buffer = [0; 100];
+                // Keep this large enough for typical module invocations with multiple flags
+                // (e.g. ui_demo + touch path + resolution + fps).
+                let mut buffer = [0; 4096];
                 let read_n = match client.read(&mut buffer) {
                     Ok(n) => n,
                     Err(err) => {
