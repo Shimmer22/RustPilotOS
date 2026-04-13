@@ -254,11 +254,7 @@ mod tests {
     fn test_try_read_consumes_update() {
         let (tx, mut rx) = Channel::<TestStruct>::new();
 
-        tx.send(TestStruct {
-            x: 1,
-            y: 2,
-            z: 3,
-        });
+        tx.send(TestStruct { x: 1, y: 2, z: 3 });
 
         let try_result = rx.try_read().unwrap();
         assert_eq!(try_result.x, 1);
