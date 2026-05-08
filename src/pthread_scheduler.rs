@@ -21,6 +21,7 @@ pub struct SchedulePthread {
 impl SchedulePthread {
     extern "C" fn wrapper(ptr: *mut libc::c_void) -> *mut libc::c_void {
         let sp = unsafe { Arc::from_raw(ptr as *const SchedulePthread) };
+        LAST_SCHEDULED_TIME.set(get_time_now());
 
         (sp.thread_func)(Arc::into_raw(sp) as *mut libc::c_void);
         null_mut()
@@ -28,6 +29,7 @@ impl SchedulePthread {
 
     fn simple_wrapper(ptr: *mut libc::c_void) -> *mut libc::c_void {
         let sp = unsafe { Arc::from_raw(ptr as *const SchedulePthread) };
+        LAST_SCHEDULED_TIME.set(get_time_now());
 
         let b = sp.thread_args as *mut Box<dyn FnOnce(Arc<SchedulePthread>)>;
         let a = unsafe { Box::from_raw(b) };
@@ -133,7 +135,6 @@ mod tests {
             test,
             &mut num as *mut i32 as *mut libc::c_void,
             false,
-            None,
         );
 
         nanosleep(13 * 1000 * 1000); // sleep to wait the thread start excuting
@@ -169,7 +170,6 @@ mod tests {
             test,
             &mut num as *mut i32 as *mut libc::c_void,
             false,
-            None,
         );
 
         std::thread::sleep(std::time::Duration::from_secs(2));
